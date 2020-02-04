@@ -33,7 +33,15 @@ lmat = 0.6 * linf
 
 ages = 1:100
 
+sel_50 <- 0.75 * linf
+
+sel_delta <- 1
+
+
 length_at_age <- linf * (1 - exp(-k * (ages - t0)))
+
+sel_at_age <- 1 / (1 + exp(-log(19) * (length_at_age -sel_50) / sel_delta))
+
 
 weight_at_age <- wa * length_at_age ^ wb
 
@@ -62,6 +70,307 @@ cc %>% ggplot(aes(age, n)) +
   labs(x = "Age", y = "Numbers") 
 
 lm(log(n)~ age , data = cc)
+
+```
+
+
+```{r}
+library(tidyverse)
+theme_pres = theme_minimal(base_size = 22)
+
+
+
+linf = 50
+
+k = 0.133
+
+m = 1.5
+
+t0 = -.1
+
+wa = 1e-3
+
+wb = 3
+
+lmat = 0.6 * linf
+
+ages = 1:100
+
+sel_50 <- 0.4 * linf
+
+sel_delta <- 1
+
+
+length_at_age <- linf * (1 - exp(-k * (ages - t0)))
+
+sel_at_age <- 1 / (1 + exp(-log(19) * (length_at_age -sel_50) / sel_delta))
+
+
+weight_at_age <- wa * length_at_age ^ wb
+
+plot(length_at_age)
+
+n_at_age = 1000 * exp(-m * (ages - 1))
+
+plot(length_at_age,n_at_age * weight_at_age)
+
+plot(log(n_at_age))
+
+cc <- data_frame(age = ages, length = length_at_age,
+                 weight = weight_at_age,
+                 n = n_at_age,
+                 b = n_at_age * weight_at_age,
+                 c = n_at_age * sel_at_age)
+
+
+cc %>%
+  filter(age>= age[c >= max(c)]) %>% 
+  ggplot() + 
+  geom_point(aes(age,(c)),size = 2) + 
+  theme_pres + 
+  labs(x = "Age", y = "Log(Numbers)") + 
+  geom_text(aes(x = 75, y = -20, label = "Slope is -0.7"), size = 8, color = "red")
+
+
+cc %>% ggplot(aes(length_at_age, n)) + 
+  geom_point(size = 2) + 
+  theme_pres + 
+  labs(x = "Age", y = "Numbers") 
+
+lm(log(n)~ age , data = cc)
+
+
+
+cc %>% ggplot(aes(length_at_age, sel_at_age)) + 
+  geom_line(size = 2) + 
+  theme_pres + 
+  labs(x = "Length", y = "Proportion of Fish Selected") 
+
+
+```
+
+
+```{r}
+
+linf = 50
+
+k = 0.4
+
+m = 1.5
+
+t0 = -.1
+
+wa = 1e-3
+
+wb = 3
+
+lmat = 0.6 * linf
+
+ages = 1:25
+
+sel_50 <- 0.75 * linf
+
+sel_delta <- 1
+
+
+length_at_age <- linf * (1 - exp(-k * (ages - t0)))
+
+
+length_at_age2 <- linf * 0.5 * (1 - exp(-k * 0.25 * (ages - t0)))
+
+
+leg = data_frame(age = ages, "Red Fish" = length_at_age,
+                 "Blue Fish" = length_at_age2 )
+
+
+leg %>% 
+  pivot_longer(contains("Fish"), names_to = "Species", values_to = "Length") %>% 
+  ggplot(aes(age, Length, color = Species )) + 
+  geom_line(size = 2) + 
+  theme_pres
+
+
+
+```
+
+
+
+# steepness fun
+
+
+```{r}
+library(tidyverse)
+theme_pres = theme_minimal(base_size = 22)
+
+
+linf = 100
+
+t0 = -.1
+
+wa = 1e-4
+
+wb = 3
+
+k = 0.2
+
+m = 1.5 * k
+
+lmat = 0.66 * linf
+
+ages = 1:100
+
+sel_50 <- 1
+
+sel_delta <- 1
+
+length_at_age <- linf * (1 - exp(-k * (ages - t0)))
+
+sel_at_age <- 1 / (1 + exp(-log(19) * (length_at_age -sel_50) / sel_delta))
+
+weight_at_age <- wa * length_at_age ^ wb
+
+maturity_at_age <- 1 / (1 + exp(-log(19) * (length_at_age -lmat) / 4))
+
+Rcpp::sourceCpp(here::here("src","popmodel.cpp"))
+
+years = 500
+
+      n_ages = length(ages) - 1
+      
+  foo <- function(h,f){
+      
+    blah = popmodel(length_at_age = length_at_age,
+                    weight_at_age = weight_at_age,
+                    maturity_at_age = as.numeric(maturity_at_age),
+                    selectivity_at_age = sel_at_age,
+                    rec_devs = rep(1,years),
+                    m = m,
+                    n_ages = n_ages,
+                    age_vector = (1:n_ages) - 1,
+                    sim_years = years - 100,
+                    burn_years = 100,
+                    rec_form = 1,
+                    steepness =h,
+                    r0 = 100,
+                    f = f)
+    
+   ssbt <-  last(rowSums(blah$ssb_t))
+   
+   rec_t = last(blah$rec_t)
+   
+   c_t = last(rowSums(blah$c_t))
+    
+   spr = ssbt / blah$ssb0
+   
+   n = last(rowSums(blah$b_t))
+   
+   n0 = first(rowSums(blah$b_t))
+   
+   dep = n / n0
+   
+   out = tibble(ssb = ssbt, rec = rec_t, catch = c_t, spr = spr, n = n, n0 = n0, dep = dep)
+   
+  }
+  
+  
+   
+  
+  spr_eg <- tidyr::expand_grid(h = seq(0.3, 1, by = .1),
+                               f = seq(0, 2 * m, length.out = 200)) %>%
+    mutate(outcomes = map2(h, f, foo))
+  
+test <- spr_eg %>% 
+  unnest(cols = outcomes)
+
+
+test %>% 
+  ggplot(aes(ssb, rec, color = h, group = h)) + 
+  geom_line(size = 2) + 
+  scale_color_viridis_c(name = "Steepness", guide = guide_colorbar(barwidth = 15, frame.colour = "black")) +
+  theme_pres + 
+  theme(legend.position = "top") +
+  labs(x = "Spawning Stock Biomass", y = "Recruitment Numbers")
+
+
+
+test %>% 
+  ggplot(aes(spr, catch, color = h, group = h)) + 
+  geom_line(size = 2) + 
+  geom_vline(aes(xintercept = 0.4)) +
+  scale_color_viridis_c(name = "Steepness", guide = guide_colorbar(barwidth = 15, frame.colour = "black")) +
+  theme_pres + 
+  theme(legend.position = "top") +
+  labs(x = "SPR", y = "Catch")
+
+test %>% 
+  ggplot(aes(dep, catch, color = h, group = h)) + 
+  geom_line(size = 2) + 
+  geom_vline(aes(xintercept = 0.4)) +
+  scale_color_viridis_c(name = "Steepness", guide = guide_colorbar(barwidth = 15, frame.colour = "black")) +
+  theme_pres + 
+  theme(legend.position = "top") +
+  labs(x = "Depletion", y = "Catch")
+
+
+test %>% 
+  group_by(h) %>% 
+  filter(catch == max(catch)) %>% 
+  ggplot(aes(h, spr, color = factor(h))) + 
+  geom_point() +   scale_color_viridis_d(name = "Steepness") +
+    theme_pres + 
+  theme(legend.position = "top") +
+  labs(x = "Steepness", y = "SPR MSY")
+
+
+test %>% 
+  filter(h == 0.3) %>% 
+  # filter(catch == max(catch))
+  ggplot(aes(dep, catch)) + 
+  geom_point()
+   
+
+msyfoo <- function(f,h){
+    
+  print(h)
+    blah = popmodel(length_at_age = length_at_age,
+                    weight_at_age = weight_at_age,
+                    maturity_at_age = as.numeric(maturity_at_age),
+                    selectivity_at_age = sel_at_age,
+                    rec_devs = rep(1,years),
+                    m = m,
+                    n_ages = n_ages,
+                    age_vector = (1:n_ages) - 1,
+                    sim_years = years - 100,
+                    burn_years = 100,
+                    rec_form = 1,
+                    steepness = h,
+                    r0 = 100,
+                    f = f)
+    
+   ssbt <-  last(rowSums(blah$ssb_t))
+   
+   rec_t = last(blah$rec_t)
+   
+   c_t = last(rowSums(blah$c_t))
+    
+   spr = ssbt / blah$ssb0
+   
+   n = last(rowSums(blah$b_t))
+   
+   n0 = first(rowSums(blah$b_t))
+   
+   dep = n / n0
+   
+   out = tibble(ssb = ssbt, rec = rec_t, catch = c_t, spr = spr, n = n, n0 = n0, dep = dep)
+   
+   catch = -c_t
+    
+}
+
+msyfoo(0.2,.6)
+
+nlminb(0.2, msyfoo, h = 0.6)
+  
 
 ```
 
