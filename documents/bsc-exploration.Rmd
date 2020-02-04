@@ -1,0 +1,242 @@
+---
+title: "BSC Exploratory Analysis"
+author: "Dan"
+date: "1/31/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(rstan)
+library(rstanarm)
+library(LBSPR)
+library(LIME)
+library(googledrive)
+library(googlesheets4)
+library(gghighlight)
+library(here)
+```
+
+
+# explore data
+
+## load data
+
+```{r}
+
+if (file.exists(here("data","bsc-length-data.csv")) == FALSE){
+
+googledrive::drive_find(n_max = 30)
+
+length_data <- drive_get("biology-sample-details-20190919_CIC.csv")
+
+drive_download(length_data, path = here("data","bsc-length-data.csv"))
+
+
+}
+
+length_data_header <- read_csv(here("data","bsc-length-data.csv"), n_max = 3)
+
+length_data <- read_csv(here("data","bsc-length-data.csv"), skip = 4) %>% 
+  mutate(sample_date = lubridate::mdy_hm(sample_date_time, locale = )) %>% 
+  select(sample_date, everything()) %>% 
+  mutate(year = lubridate::year(sample_date),
+         month = lubridate::month(sample_date, label = TRUE),
+         day = lubridate::day(sample_date),
+         weekday = lubridate::wday(sample_date, label = TRUE))
+
+length_data %>% skimr::skim()
+
+
+```
+
+
+## explore data
+
+
+```{r}
+
+length_hist_plot <- length_data %>% 
+  ggplot(aes(carapace_width)) + 
+  geom_histogram()
+
+length_hist_plot
+
+```
+
+
+Hmmm what's up with that. 
+
+```{r}
+
+length_data %>% 
+  ggplot(aes(carapace_width, fill = sex_type)) + 
+  geom_histogram()
+
+
+```
+
+
+Typo?
+
+```{r}
+length_data %>% 
+  ggplot(aes(carapace_width, weight)) + 
+  geom_point()
+
+```
+
+Seems like it, since suggests weight is the same for a tiny critter as a massive one
+
+
+```{r}
+length_data %>% 
+  ggplot(aes(carapace_width)) + 
+  geom_histogram() + 
+  facet_wrap(~monitor)
+
+```
+
+Not that....
+
+
+```{r}
+
+categorical <- colnames(length_data)[map_lgl(length_data,is.character)]
+
+
+a = length_data %>% 
+  pivot_longer(cols = categorical, names_to = "variable", values_to = "level") %>% 
+  filter(!str_detect(variable,"date_time|(id)")) %>% 
+  ggplot(aes(level,carapace_width)) + 
+  geom_boxplot() + 
+  facet_wrap(~variable, scales = "free_y") + 
+  coord_flip()
+
+```
+
+Oh good lord, there are starfish in here... but that still wouldn't explain the weight issue
+
+
+```{r}
+length_data %>% 
+  filter(species == "Blue swimming crab") %>% 
+  ggplot(aes(carapace_width, fill = sex_type)) + 
+  geom_histogram()
+
+```
+
+
+```{r}
+categorical <- colnames(length_data)[map_lgl(length_data,is.character)]
+
+
+length_data %>% 
+  filter(species == "Blue swimming crab") %>% 
+  pivot_longer(cols = categorical, names_to = "variable", values_to = "level") %>% 
+  filter(!str_detect(variable,"date_time|(id)|(vessel)|(comment)")) %>% 
+  ggplot(aes(level,carapace_width)) + 
+  geom_boxplot() + 
+  facet_wrap(~variable, scales = "free_y") + 
+  coord_flip()
+
+```
+
+
+Huh, it's all over the board
+
+
+
+```{r}
+
+numeric <- colnames(length_data)[map_lgl(length_data,is.numeric)]
+
+numeric = numeric[numeric != "carapace_width"]
+
+
+length_data %>% 
+  filter(species == "Blue swimming crab") %>% 
+  pivot_longer(cols = numeric, names_to = "variable", values_to = "value") %>% 
+  filter(!str_detect(variable,"date_time|(id)|(vessel)")) %>% 
+  ggplot(aes(carapace_width, value)) + 
+  geom_point() + 
+  facet_wrap(~variable, scales = "free") + 
+  coord_flip()
+
+```
+
+Hmmm well this is suuuuuper hacky. 
+```{r}
+
+length_data %>%
+  mutate(test = ifelse(carapace_width < 50, carapace_width * 10, carapace_width)) %>%
+  filter(species == "Blue swimming crab") %>%
+  ggplot(aes(test, fill = sex_type)) +
+  geom_histogram()
+
+```
+
+
+
+## clean data
+
+```{r}
+
+bsc_data <- length_data %>%
+  filter(species == "Blue swimming crab") %>%
+  mutate(carapace_width = ifelse(carapace_width < 50, carapace_width * 10, carapace_width))
+
+
+bsc_data %>%
+  ggplot(aes(carapace_width, fill = sex_type)) +
+  geom_histogram()
+
+```
+
+```{r}
+
+bsc_data %>% 
+  ggplot(aes(carapace_width, month, group = month)) + 
+  ggridges::geom_density_ridges()
+
+```
+
+
+```{r}
+
+bsc_data %>% 
+  ggplot(aes(carapace_width, y = monitor)) + 
+  geom_density_ridges()
+
+```
+
+
+```{r}
+
+bsc_data %>% 
+  ggplot(aes(carapace_width, fill = monitor)) + 
+  geom_histogram() + 
+  facet_wrap(~monitor)
+
+```
+
+
+```{r}
+
+bsc_data %>% 
+  ggplot(aes(carapace_width, fill = location)) + 
+  geom_histogram() + 
+  facet_wrap(~location)
+
+
+```
+
+
+```{r}
+bsc_data %>% 
+  ggplot(aes(carapace_width, y = location)) + 
+  geom_density_ridges()
+
+```
+

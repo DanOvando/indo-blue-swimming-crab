@@ -1,0 +1,67 @@
+---
+title: "indo-bsc-scribbles"
+author: "Dan"
+date: "2/3/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# lenght based things
+
+```{r}
+library(tidyverse)
+theme_pres = theme_minimal(base_size = 22)
+
+
+linf = 100
+
+k = 0.05
+
+m = 1.2
+
+t0 = -.1
+
+wa = 1e-3
+
+wb = 3
+
+lmat = 0.6 * linf
+
+ages = 1:100
+
+length_at_age <- linf * (1 - exp(-k * (ages - t0)))
+
+weight_at_age <- wa * length_at_age ^ wb
+
+plot(length_at_age)
+
+n_at_age = 1 * exp(-m * (ages - 1))
+
+plot(length_at_age,n_at_age * weight_at_age)
+
+plot(log(n_at_age))
+
+cc <- data_frame(age = ages, length = length_at_age,
+                 weight = weight_at_age,
+                 n = n_at_age,
+                 b = n_at_age * weight_at_age)
+
+
+cc %>% ggplot(aes(age, log(n))) + 
+  geom_point(size = 2) + 
+  theme_pres + 
+  labs(x = "Age", y = "Log(Numbers)") 
+
+cc %>% ggplot(aes(age, n)) + 
+  geom_point(size = 2) + 
+  theme_pres + 
+  labs(x = "Age", y = "Numbers") 
+
+lm(log(n)~ age , data = cc)
+
+```
+
