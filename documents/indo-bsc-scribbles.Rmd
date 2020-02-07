@@ -213,11 +213,11 @@ wb = 3
 
 k = 0.2
 
-m = 1.5 * k
+m = .2
 
-lmat = 0.66 * linf
+lmat = 0.6 * linf
 
-ages = 1:100
+ages = 1:50
 
 sel_50 <- 1
 
@@ -233,9 +233,9 @@ maturity_at_age <- 1 / (1 + exp(-log(19) * (length_at_age -lmat) / 4))
 
 Rcpp::sourceCpp(here::here("src","popmodel.cpp"))
 
-years = 500
+years = 200
 
-      n_ages = length(ages) - 1
+n_ages = length(ages)
       
   foo <- function(h,f){
       
@@ -247,8 +247,8 @@ years = 500
                     m = m,
                     n_ages = n_ages,
                     age_vector = (1:n_ages) - 1,
-                    sim_years = years - 100,
-                    burn_years = 100,
+                    sim_years = years,
+                    burn_years = 0,
                     rec_form = 1,
                     steepness =h,
                     r0 = 100,
@@ -260,7 +260,7 @@ years = 500
    
    c_t = last(rowSums(blah$c_t))
     
-   spr = ssbt / blah$ssb0
+   spr = blah$spr
    
    n = last(rowSums(blah$b_t))
    
@@ -268,7 +268,10 @@ years = 500
    
    dep = n / n0
    
-   out = tibble(ssb = ssbt, rec = rec_t, catch = c_t, spr = spr, n = n, n0 = n0, dep = dep)
+   ssbdep = ssbt / blah$ssb0
+   
+   out = tibble(ssb = ssbt, rec = rec_t, catch = c_t, spr = spr, n = n, n0 = n0, dep = dep,
+                ssbdep = ssbdep)
    
   }
   
@@ -302,14 +305,25 @@ test %>%
   theme(legend.position = "top") +
   labs(x = "SPR", y = "Catch")
 
-test %>% 
+b = test %>% 
   ggplot(aes(dep, catch, color = h, group = h)) + 
   geom_line(size = 2) + 
   geom_vline(aes(xintercept = 0.4)) +
   scale_color_viridis_c(name = "Steepness", guide = guide_colorbar(barwidth = 15, frame.colour = "black")) +
   theme_pres + 
   theme(legend.position = "top") +
-  labs(x = "Depletion", y = "Catch")
+  labs(x = "Biomass Depletion", y = "Catch")
+
+
+
+a = test %>% 
+  ggplot(aes(ssbdep, catch, color = h, group = h)) + 
+  geom_line(size = 2) + 
+  geom_vline(aes(xintercept = 0.4)) +
+  scale_color_viridis_c(name = "Steepness", guide = guide_colorbar(barwidth = 15, frame.colour = "black")) +
+  theme_pres + 
+  theme(legend.position = "top") +
+  labs(x = "Spawning Biomass Depletion", y = "Catch")
 
 
 test %>% 
@@ -329,48 +343,51 @@ test %>%
   geom_point()
    
 
-msyfoo <- function(f,h){
-    
-  print(h)
-    blah = popmodel(length_at_age = length_at_age,
-                    weight_at_age = weight_at_age,
-                    maturity_at_age = as.numeric(maturity_at_age),
-                    selectivity_at_age = sel_at_age,
-                    rec_devs = rep(1,years),
-                    m = m,
-                    n_ages = n_ages,
-                    age_vector = (1:n_ages) - 1,
-                    sim_years = years - 100,
-                    burn_years = 100,
-                    rec_form = 1,
-                    steepness = h,
-                    r0 = 100,
-                    f = f)
-    
-   ssbt <-  last(rowSums(blah$ssb_t))
-   
-   rec_t = last(blah$rec_t)
-   
-   c_t = last(rowSums(blah$c_t))
-    
-   spr = ssbt / blah$ssb0
-   
-   n = last(rowSums(blah$b_t))
-   
-   n0 = first(rowSums(blah$b_t))
-   
-   dep = n / n0
-   
-   out = tibble(ssb = ssbt, rec = rec_t, catch = c_t, spr = spr, n = n, n0 = n0, dep = dep)
-   
-   catch = -c_t
-    
-}
 
-msyfoo(0.2,.6)
 
-nlminb(0.2, msyfoo, h = 0.6)
-  
+
+```
+
+
+
+# sampling
+
+
+```{r}
+library(tidyverse)
+library(ggbeeswarm)
+theme_pres = theme_minimal(base_size = 22)
+
+
+samps = tidyr::expand_grid(sigma_obs = c(10, 200),
+                           samps = seq(2, 200, length.out = 10)) %>%
+  mutate(samples = map2(samps, sigma_obs, ~ (rnorm(.x, 1000, .y)))) %>%
+  unnest(cols = samples) %>% 
+  group_by(sigma_obs, samps) %>% 
+  mutate(mu = mean(samples),
+         var = var(samples))
+
+samps %>%
+  ggplot() +
+  geom_quasirandom(aes(
+    samps,
+    samples,
+    group = interaction(samps, sigma_obs),
+    color = factor(sigma_obs)
+  ), alpha = 0.25,
+  position = "dodge",
+  dodge.width = 10,
+  varwidth = TRUE) + 
+  geom_line(aes(samps, mu, color = factor(sigma_obs)), size = 2) + 
+  geom_line(aes(samps, var, color = factor(sigma_obs),linetype = "variance"), size = 2) + 
+
+  scale_color_discrete(name = "Observation Error") + 
+  theme_pres + 
+  labs(x = "# of Samples",
+       y = "Measurements",
+       caption = "lines show mean at each sample size")
+
+
 
 ```
 

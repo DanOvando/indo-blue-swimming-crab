@@ -2,20 +2,26 @@
 title: "BSC Exploratory Analysis"
 author: "Dan"
 date: "1/31/2020"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
 library(tidyverse)
 library(rstan)
 library(rstanarm)
 library(LBSPR)
 library(LIME)
 library(googledrive)
-library(googlesheets4)
 library(gghighlight)
 library(here)
+library(ggridges)
+library(janitor)
+
+theme_set(theme_minimal(base_size = 15) + 
+            theme(legend.key.height = ggplot2::unit(2, "line")))
 ```
 
 
@@ -46,7 +52,7 @@ length_data <- read_csv(here("data","bsc-length-data.csv"), skip = 4) %>%
          day = lubridate::day(sample_date),
          weekday = lubridate::wday(sample_date, label = TRUE))
 
-length_data %>% skimr::skim()
+# length_data %>% skimr::skim()
 
 
 ```
@@ -183,12 +189,12 @@ length_data %>%
 
 ```{r}
 
-bsc_data <- length_data %>%
+bsc_lengths <- length_data %>%
   filter(species == "Blue swimming crab") %>%
   mutate(carapace_width = ifelse(carapace_width < 50, carapace_width * 10, carapace_width))
 
 
-bsc_data %>%
+bsc_lengths %>%
   ggplot(aes(carapace_width, fill = sex_type)) +
   geom_histogram()
 
@@ -196,25 +202,27 @@ bsc_data %>%
 
 ```{r}
 
-bsc_data %>% 
+bsc_lengths %>% 
   ggplot(aes(carapace_width, month, group = month)) + 
-  ggridges::geom_density_ridges()
+  ggridges::geom_density_ridges(jittered_points = TRUE, point_alpha = 0.5)
 
 ```
 
 
+Lack of shifting in the monthly curves would suggest continuos recruitment and growth and EQ fishing
+
 ```{r}
 
-bsc_data %>% 
+bsc_lengths %>% 
   ggplot(aes(carapace_width, y = monitor)) + 
-  geom_density_ridges()
+  ggridges::geom_density_ridges(jittered_points = TRUE, point_alpha = 0.5)
 
 ```
 
 
 ```{r}
 
-bsc_data %>% 
+bsc_lengths %>% 
   ggplot(aes(carapace_width, fill = monitor)) + 
   geom_histogram() + 
   facet_wrap(~monitor)
@@ -224,7 +232,7 @@ bsc_data %>%
 
 ```{r}
 
-bsc_data %>% 
+bsc_lengths %>% 
   ggplot(aes(carapace_width, fill = location)) + 
   geom_histogram() + 
   facet_wrap(~location)
@@ -233,10 +241,1038 @@ bsc_data %>%
 ```
 
 
+check on the berried condition
+
+
 ```{r}
-bsc_data %>% 
-  ggplot(aes(carapace_width, y = location)) + 
-  geom_density_ridges()
+library(rstanarm)
+maturity_check <- bsc_lengths %>% 
+  filter(sex_type == "Female") %>% 
+  filter(berried_type %in% c("No","Yes")) %>% 
+  mutate(berried = berried_type == "Yes")
+
+length_bins <- seq(0, 200, by = 10)
+
+length_bin_mids <- RcppRoll::roll_mean(length_bins,n = 2, align = "right")
+
+
+maturity_check %>% 
+  mutate(length_bin = cut(carapace_width, length_bins, labels =as.character(round(length_bin_mids,3)))) %>% 
+  mutate(length_bin = as.numeric(as.character(length_bin))) %>% 
+  group_by(length_bin) %>% 
+  summarise(p_berried = mean(berried)) %>% 
+  ggplot(aes(length_bin, p_berried)) + 
+  geom_col() + 
+  geom_vline(aes(xintercept = 102))
 
 ```
+
+Hmm interesting. data don't really reflect a length at 50% maturity of 102. Though this is just berried, not mature. So could be a spawning season issue. Or, possible some selectivity here: are there any restrictions on capture of berried females?
+
+```{r}
+
+maturity_check %>% 
+  group_by(month) %>% 
+  summarise(pmat = mean(berried),
+            sample_size = length(berried))
+
+```
+
+
+
+```{r, include=FALSE}
+
+
+maturity_check <-  maturity_check %>% 
+  select(berried, carapace_width)
+
+mat_model <- stan_glm(berried ~ carapace_width, family = "binomial", data = maturity_check, cores = 4)
+```
+
+```{r}
+extend <- tibble(berried = FALSE, carapace_width = seq(180, 250,by = 1))
+
+maturity_check <- maturity_check %>% 
+  bind_rows(extend)
+
+test = posterior_predict(mat_model, newdata = maturity_check)
+
+
+maturity_check$p_mature = colMeans(test)
+
+maturity_check %>% 
+  ggplot(aes(carapace_width, p_mature)) + 
+  geom_point()
+
+```
+
+If berried a proxy for mature, this would suggest that l50% mature shouldn't be until around 250cm.... hmmm. 
+
+
+
+```{r}
+bsc_lengths %>% 
+  ggplot(aes(carapace_width, y = location)) + 
+  ggridges::geom_density_ridges(jittered_points = TRUE, point_alpha = 0.5)
+
+```
+
+So spatially, we're looking at MGM and Margasari as the only substantial locations. However, the two areas do tell a pretty different story. Let's see if there'a any volume information in the landings-summary0-20190919_CIC data
+
+
+```{r}
+
+landings_data <-
+  read_csv(here("data", "landing-summary-20190919_CIC.csv"), skip = 4) %>%
+  janitor::clean_names() %>%
+  mutate(sample_date = lubridate::mdy_hm(start_date_time, locale =)) %>%
+  select(sample_date, everything()) %>%
+  mutate(
+    year = lubridate::year(sample_date),
+    month = lubridate::month(sample_date, label = TRUE),
+    day = lubridate::day(sample_date),
+    weekday = lubridate::wday(sample_date, label = TRUE)
+  )
+
+
+# landings_data %>% skimr::skim()
+
+unique(landings_data$location)
+```
+
+Looking at spatial "weight", which I'm assuming is catch weight of bsc?
+```{r}
+landings_data %>% 
+  group_by(year, location) %>% 
+  summarise(catch_weight = sum(weight)) %>% 
+  ungroup() %>% 
+  mutate(psamp = catch_weight / sum(catch_weight)) %>%
+  ggplot(aes(location, psamp)) + 
+  geom_col(position = "dodge")
+  
+```
+
+
+
+Hmm OK MGM much more prominent, let's check proportion compared to length samples
+
+```{r}
+
+bsc_lengths %>% 
+  group_by(year,location) %>% 
+  summarise(samples = length(carapace_width)) %>% 
+  ungroup() %>% 
+  mutate(psamp = samples / sum(samples)) %>% 
+  ggplot(aes(location, psamp)) + 
+  geom_col(position = "dodge")
+
+
+```
+
+Looks like the trends are similar between the spatial composition of the catch data and the spatial composition of the catch weights. Could probably stand for a bit of adjustment, margasari is a little underpresented in the length data if we take the catches at face value, but good enough for now. 
+
+Looking at it a bit more fine scale
+
+
+```{r}
+
+catch_weighting <- landings_data %>% 
+  group_by(location, year, month) %>% 
+  summarise(catch_weight = sum(weight)) %>% 
+  group_by(year, month) %>% 
+  mutate(catch_weight_prop = catch_weight / sum(catch_weight))
+
+catch_weighting %>% 
+  ggplot(aes(month, catch_weight_prop, fill = location)) + 
+  geom_col()
+```
+
+Hmm interesting, so some major changes in the location composition by month. Will need to look into whether that's changes in sampling location, or in fleet distribution
+
+Let's compare that number of observations just to see if there's a sampling effect
+
+```{r}
+
+catch_weighting <- landings_data %>% 
+  group_by(location, year, month) %>% 
+  summarise(catch_weight = sum(weight),
+            observations = length(weight)) %>% 
+  group_by(year, month) %>% 
+  mutate(catch_weight_prop = catch_weight / sum(catch_weight),
+         observations_prop = observations / sum(observations))
+
+
+catch_weighting %>% 
+  ggplot(aes(month, observations_prop, fill = location)) + 
+  geom_col()
+
+catch_weighting %>% 
+  ggplot(aes(observations_prop, catch_weight_prop)) + 
+  geom_point() + 
+  geom_abline(aes(slope = 1, intercept = 0))
+
+
+```
+
+Hmmm almost one-to-one between observations and reported catch. So, a not clear from here whether differences in catch volume come are reflective of larger population size around the bigger areas, or just more sampling effort in those areas. 
+
+
+
+
+Let's create a weighted version of the length comps just to have it
+
+```{r}
+
+catch_weighting <- landings_data %>% 
+  group_by(location, year) %>% 
+  summarise(catch_weight = sum(weight),
+            observations = length(weight)) %>% 
+  group_by(year) %>% 
+  mutate(catch_weight_prop = catch_weight / sum(catch_weight),
+         observations_prop = observations / sum(observations))
+
+
+weighted_bsc_lengths <- bsc_lengths %>% 
+  # mutate(width_bin = ggplot2::cut_interval(carapace_width, length =  4)) %>% 
+    mutate(width_bin = carapace_width) %>% 
+  group_by(location, width_bin) %>% 
+  count() %>% 
+  left_join(catch_weighting, by = c("location")) %>% 
+  mutate(weighted_n = n * catch_weight_prop) %>% 
+  group_by(year,width_bin) %>% 
+  summarise(weighted_n = sum(weighted_n))
+
+weighted_bsc_lengths %>% 
+  ggplot(aes(width_bin, weighted_n)) + 
+  geom_col()
+
+
+
+```
+Hmmm interesting spikes in certain widths. Should check if those are location or observer specific. 
+
+
+COmpare weighted to raw counts. Basically the same, so going with the raw data for now
+```{r}
+
+bsc_lengths %>% 
+  group_by(carapace_width) %>% 
+  count() %>% 
+  ggplot(aes(carapace_width, n)) + 
+  geom_col()
+
+```
+
+
+## life history
+
+For now, just pulling in some of the life history data manually from 2019-BSC-092019.xlsx  SPR tab just for illustrative purposes
+
+
+Looking at the data, t0 is reported as 0.0792, and entered as a positive number in the spreadsheet. However, t0 is the theoretical age at length 0, so should be negative: makes a small difference in the length at age values. 
+
+```{r}
+
+linf <- 189.50
+
+k <-  1.2 
+
+t0 <- -0.0792
+
+lmat_50 <- 102
+
+lmat_95 <- 106
+
+lsel_50 <- 90
+
+lsel_95 <- 120
+
+m <- 1.29 
+
+wa <- 4.1e-2
+
+wb <- 3.183
+
+max_age <- 6
+
+ages = seq(0, max_age, by = 1/12)
+
+length_at_age <-  linf * (1 - exp(-k * (ages - t0)))
+
+weight_at_age <- wa * length_at_age ^ wb
+  
+maturity_at_age <- 1 / (1 + exp(-log(19) * (length_at_age -lmat_50) / (lmat_95 - lmat_50)))
+
+sel_at_age <- 1 / (1 + exp(-log(19) * (length_at_age -lsel_50) / (lsel_95 - lsel_50)))
+
+
+ogives <-
+  tibble(
+    age = ages,
+    length = length_at_age,
+    weight = weight_at_age,
+    maturity = maturity_at_age,
+    selectivity = sel_at_age
+  )
+
+
+```
+
+Plot ogives
+
+
+```{r}
+
+ogives %>% 
+  pivot_longer(-age, names_to = "variable", values_to = "value") %>% 
+  ggplot(aes(age, value)) + 
+  geom_line() + 
+  facet_wrap(~variable, scales = "free_y")
+
+
+```
+
+Hmmm this looks a little tough. suggests that everything is selected and mature
+
+
+```{r}
+
+ogives$unfished_n <- 1 * exp(-m * (ages))
+
+ogives <- ogives %>% 
+  mutate(unfished_b = unfished_n * weight_at_age,
+         unfished_ssb = unfished_n * weight_at_age * maturity_at_age)
+
+ogives %>% 
+  pivot_longer(-age, names_to = "variable", values_to = "value") %>% 
+  ggplot(aes(age, value)) + 
+  geom_line() + 
+  facet_wrap(~variable, scales = "free_y")
+
+
+```
+
+So this is telling the story of basically a three year lifespan at max
+
+
+let's take a look at the theoretical length distribution
+
+
+```{r}
+
+bsc_lengths %>% 
+  group_by(carapace_width) %>% 
+  count() %>% 
+  ungroup() %>% 
+  mutate(pn = n / max(n)) %>% 
+  ggplot() +
+  geom_col(aes(carapace_width, pn)) + 
+  geom_area(data = ogives, aes(length, unfished_n / max(unfished_n), fill = "Theoretical Unfished Size Structure"), alpha = 0.5) + 
+  geom_vline(data = ogives,aes(xintercept = length[age == 1],
+                               color = "Age 1")) + 
+  scale_fill_discrete(name = '') + 
+  theme(legend.position = "top")
+
+
+```
+
+
+Hmm interesting. So if these life history data are right, this means that most of the data are coming from less than 1-year old crabs. seems plausible given life history but worth double checkign with biology of the species. Should probably be running this as a monthly model for this kind of growth rate, but that depends on whether or not they are molting montly, or if they molt at all. Molting would throw a wrench in this and speaking of that, how did they estiamte the VB params for an invert given need for aging? 
+
+Need to spend some time thinking about the montly issue.... as written here implies that crabs grow continously, or at the very least molt monthly. What would happen if this isnt' the case? Suppose they molt twice a year, with some transition matrix. would mess all this up since a say 1 month crab would be the same length as a 6 month crab, etc (and given the range of sizes observed if the natural mortality is right then there would need to be a lot of cariaion on length at age as well)
+
+
+## spawner per recruit
+
+```{r}
+
+linf <- 189.50
+
+k <-  1.2
+
+t0 <- -0.0792
+
+lmat_50 <- 102
+
+lmat_95 <- 106
+
+m <- 1.29
+
+wa <- 4.1e-2
+
+wb <- 3.183
+
+per_recruit_foo <-
+  function(f,
+           lsel_50,
+           lsel_delta = 10,
+           linf,
+           k,
+           t0,
+           lmat_50,
+           lmat_delta = 2,
+           m,
+           wa,
+           wb,
+           time_step = 1 / 12) {
+    
+    max_age = round(log(.005) / -m)
+    
+    ages = seq(0, max_age, by = time_step)
+    
+    n_ages = length(ages)
+    
+    length_at_age <-  linf * (1 - exp(-k * (ages - t0)))
+    
+    weight_at_age <- wa * length_at_age ^ wb
+    
+    maturity_at_age <-
+      1 / (1 + exp(-log(19) * (length_at_age - lmat_50) / (lmat_delta)))
+    
+    sel_at_age <-
+      1 / (1 + exp(-log(19) * (length_at_age - lsel_50) / (lsel_delta)))
+    
+    f_at_age <-  f * sel_at_age
+    
+    n = rep(0, n_ages)
+    
+    n_unfished <- 1 * exp(-(m * ages))
+    
+    n_unfished[n_ages] <-
+      n_unfished[n_ages - 1] * exp(-m) / (1 - exp(-m))
+    
+    n[1] <- 1
+    
+    for (t in 2:n_ages) {
+      n[t] = n[t - 1] * exp(-time_step * (m + f_at_age[t - 1]))
+      
+    }
+    
+    n[n_ages] <-
+      n[n_ages - 1] * exp(-(m + f_at_age[n_ages])) / (1 - exp(-(m + f_at_age[n_ages])))
+    
+    ypr = sum((f_at_age) / ((m + f_at_age)) * (n * (1 - exp(-time_step *(m + f_at_age)))) * weight_at_age)
+    
+    sp <- sum(n * weight_at_age * maturity_at_age)
+    
+    unfished_sp <- sum(n_unfished * weight_at_age * maturity_at_age)
+
+    per_recruit <- tibble(spr = sp / unfished_sp, ypr = ypr)
+    
+  }
+
+per_recruit_analysis <- tidyr::expand_grid(f_m = seq(0, 4, length.out = 100),
+                   lc_linf = seq(0, 1, length.out = 100)) %>%
+  mutate(per_recriut = map2(
+    f_m,
+    lc_linf,
+    ~ per_recruit_foo(
+      f = .x * m,
+      lsel_50 = .y * linf,
+      linf = linf,
+      k = k,
+      t0 = t0,
+      lmat_50 = lmat_50,
+      lmat_delta = lmat_95 - lmat_50,
+      m = m,
+      wa = wa,
+      wb = wb
+    )
+  ))
+
+a = per_recruit_analysis %>% 
+  unnest(cols = per_recriut)
+
+spr_plot <- a %>% 
+  ggplot(aes(f_m, lc_linf * linf, fill = spr)) + 
+  geom_raster(interpolate = TRUE) + 
+    stat_contour(aes(z = spr), color = "lightgrey") + 
+  scale_fill_viridis_c(guide = guide_colorbar(frame.colour = "black")) + 
+  # scale_fill_gradient2(low = "black", high = "green", mid = "white", midpoint = 0.4)  + 
+    labs(x = "F/M", y = "Length 50% Selected") + 
+      scale_x_continuous(expand = expand_scale(0,0)) + 
+      scale_y_continuous(expand = expand_scale(0,0))
+
+
+
+ypr_plot <- a %>% 
+  ggplot(aes(f_m, lc_linf * linf, fill = ypr / max(ypr))) + 
+  geom_raster(interpolate = TRUE) + 
+  stat_contour(aes(z = ypr / max(ypr)), color = "lightgrey") + 
+    scale_fill_viridis_c(option = "inferno") + 
+  # scale_fill_gradient2(low = "black",mid = "white", high = "steelblue", midpoint = 0.5) + 
+  labs(x = "F/M", y = "Length 50% Selected") + 
+    scale_x_continuous(expand = expand_scale(0,0)) + 
+      scale_y_continuous(expand = expand_scale(0,0))
+
+
+
+spr_v_ypr_plot <- a %>% 
+  mutate(ypr = ypr / max(ypr)) %>% 
+  ggplot(aes(ypr, spr,
+             alpha = lc_linf * linf,
+             size = sqrt(lc_linf * linf),
+             color = f_m)) + 
+  geom_point() + 
+  scale_size_continuous(breaks =seq(0,10, by = 2), labels = seq(0,10, by = 2)^2) +
+    scale_color_viridis_c(option = "B") + 
+  scale_alpha_continuous(range = c(0,1)) + 
+  guides(alpha = "none", size = "none")
+
+```
+
+```{r}
+spr_plot
+```
+
+```{r}
+ypr_plot
+```
+
+```{r}
+spr_v_ypr_plot
+```
+
+
+
+
+
+## length based reference points
+
+calculate cope and punt indices
+
+
+```{r}
+
+lmax <- max(bsc_lengths$carapace_width)
+
+lopt <- ogives$length[ogives$unfished_b == max(ogives$unfished_b)]
+
+
+
+lbrp <- bsc_lengths %>%
+  group_by(carapace_width) %>%
+  count() %>%
+  ungroup() %>%
+  mutate(p_l = n / sum(n)) %>%
+  summarise(
+    p_mat = sum(p_l[carapace_width > lmat_50 & carapace_width < lmax]),
+    p_opt = sum(p_l[carapace_width > (0.9 * lopt) &
+                      carapace_width < (1.1 * lopt)]),
+    p_mega = sum(p_l[carapace_width > (1.1 * lopt) &
+                       carapace_width < lmax])
+  ) 
+
+lbrp %>% 
+  pivot_longer(everything(), names_to = "bin", values_to = "proportion") %>% 
+  mutate(bin = fct_relevel(bin, "p_mega", after = Inf)) %>% 
+  ggplot(aes(bin, proportion)) + 
+  geom_col()
+
+
+```
+
+```{r}
+monthly_lbrp <- bsc_lengths %>%
+  group_by(carapace_width, month) %>%
+  count() %>%
+  ungroup() %>%
+  group_by(month) %>% 
+  mutate(p_l = n / sum(n)) %>%
+  summarise(
+    p_mat = sum(p_l[carapace_width > lmat_50 & carapace_width < lmax]),
+    p_opt = sum(p_l[carapace_width > (0.9 * lopt) &
+                      carapace_width < (1.1 * lopt)]),
+    p_mega = sum(p_l[carapace_width > (1.1 * lopt) &
+                       carapace_width < lmax])
+  )
+
+monthly_lbrp %>% 
+  pivot_longer(-month, names_to = "bin", values_to = "proportion") %>% 
+  mutate(bin = fct_relevel(bin, "p_mega", after = Inf)) %>% 
+  ggplot(aes(month, proportion, fill = bin)) + 
+  geom_col()
+
+
+
+```
+
+
+
+Hmm so a bit of a trend there in smaller catch through the year... anything to that biologically?
+
+So let's analyze this
+
+
+```{r}
+
+p_obj <- rowSums(lbrp)
+
+p_obj
+
+
+```
+
+So right around the cutoff here, suggests fishing of the maturity ogive. In terms of biomass reference points
+
+
+Fails that reference point test (p_mat < .95)
+```{r}
+lmat_50 <= (0.75 * lopt) & lbrp$p_mat > 0.95
+```
+
+or...
+
+```{r}
+abs((lmat_50 - (0.9 * lopt)) / (0.9 * lopt)) < .05 & lbrp$p_mat > 0.9
+```
+
+
+So, would suggest spawning biomass potentially less than reference point. Basically, suggests fishin the maturity ogive, and a little too heavily
+
+If we were to say less than 1 since it's close, saying fishing immature crabs
+
+```{r}
+lbrp
+
+```
+
+
+
+
+Actually suggests things are ok then interesting. It's on the cusp I think would be the story here, and these aren't absolute
+
+
+## catch curves
+
+
+Going to do a very simple catch curve here to keep the methods clear, since LBSPR will take care of some of the more nuanced issues with going from length to weight. 
+
+
+```{r}
+
+age_bins <- seq(0, max_age, by = 1/12)
+
+age_bin_mids <- RcppRoll::roll_mean(age_bins,n = 2, align = "right")
+
+
+bsc_lengths <- bsc_lengths %>% 
+  mutate(age = (log(1 - pmin(0.99*linf,carapace_width) / linf) / -k) - t0) %>% 
+  mutate(age_bin = cut(age, age_bins, labels = as.character(round(age_bin_mids,3) ))) %>% 
+  mutate(age_bin_mid = as.numeric(as.character(age_bin)))
+
+bsc_age <- bsc_lengths %>% 
+  group_by(age_bin_mid) %>% 
+  count()
+
+bsc_age %>% 
+  ggplot(aes(age_bin_mid, n)) + 
+  geom_col()
+
+
+```
+
+
+simple catch curve
+
+
+```{r}
+
+peak_age = bsc_age$age_bin_mid[bsc_age$n == max(bsc_age$n)]
+
+
+selected_bsc <- bsc_age %>% 
+  filter(age_bin_mid >= peak_age) %>% 
+  mutate(log_n = log(n))
+
+selected_bsc %>% 
+  ggplot(aes(age_bin_mid, log_n)) + 
+  geom_point()
+
+first_reg <- lm(log_n ~ age_bin_mid, data= selected_bsc)
+
+selected_bsc <-  broom::augment(first_reg)
+
+weights <- pmax(0,selected_bsc$.fitted) / sum( pmax(0,selected_bsc$.fitted))
+
+weighted_reg <- lm(log_n ~ age_bin_mid, data= selected_bsc, weights = weights)
+
+selected_bsc$log_n_hat <- pmax(0, predict(weighted_reg, data = selected_bsc))
+
+cc_results = broom::tidy(weighted_reg)
+
+z <- -cc_results$estimate[cc_results$term == "age_bin_mid"]
+
+
+selected_bsc %>% 
+  ggplot() + 
+  geom_col(aes(age_bin_mid, log_n)) + 
+  geom_line(aes(age_bin_mid, log_n_hat), size = 2, color = "red") + 
+  labs(caption = paste0("z = ",round(z,1),"; m = ", m, "; f = ", round(z - m,1)))
+
+
+
+```
+
+Should try and figure out what's going on with the spikiness in the length comps, making it a bit tricky to fit at those older sizes, kind of guessing some rounding going on there. Results could be quite different without that. 
+
+```{r}
+
+age_bins <- seq(0, max_age, by = 1)
+
+age_bin_mids <- RcppRoll::roll_mean(age_bins,n = 2, align = "right")
+
+
+coarse_bsc_length <- bsc_lengths %>% 
+  mutate(age = (log(1 - pmin(0.99*linf,carapace_width) / linf) / -k) - t0) %>% 
+  mutate(age_bin = cut(age, age_bins, labels = as.character(round(age_bin_mids,3) ))) %>% 
+  mutate(age_bin_mid = as.numeric(as.character(age_bin)))
+
+
+bsc_age <- coarse_bsc_length %>% 
+  group_by(age_bin_mid) %>% 
+  count()
+
+
+peak_age = bsc_age$age_bin_mid[bsc_age$n == max(bsc_age$n)]
+
+
+selected_bsc <- bsc_age %>% 
+  filter(age_bin_mid >= peak_age) %>% 
+  mutate(log_n = log(n))
+
+selected_bsc %>% 
+  ggplot(aes(age_bin_mid, log_n)) + 
+  geom_point()
+
+first_reg <- lm(log_n ~ age_bin_mid, data= selected_bsc)
+
+selected_bsc <-  broom::augment(first_reg)
+
+weights <- pmax(0,selected_bsc$.fitted) / sum( pmax(0,selected_bsc$.fitted))
+
+weighted_reg <- lm(log_n ~ age_bin_mid, data= selected_bsc, weights = weights)
+
+selected_bsc$log_n_hat <- pmax(0, predict(weighted_reg, data = selected_bsc))
+
+cc_results = broom::tidy(weighted_reg)
+
+z <- -cc_results$estimate[cc_results$term == "age_bin_mid"]
+
+
+selected_bsc %>% 
+  ggplot() + 
+  geom_col(aes(age_bin_mid, log_n)) + 
+  geom_line(aes(age_bin_mid, log_n_hat), size = 2, color = "red") + 
+  labs(caption = paste0("z = ",round(z,1),"; m = ", m, "; f = ", round(z - m,1)))
+
+
+```
+
+
+
+
+# LBSPR
+
+
+Let's turn to LBSPR now. This is mostly an exercise in data wrangling. For a variety of reasons, it's easier to write a csv and then let LBSPR take care of formatting for you. 
+
+
+Hmmm a little tough to think about SPR on a monthly context. 
+
+from BSC dicussion paper 
+
+Adult crabs migrate to and aggregate in offshore waters to spawn, where oxygen and food levels are more suitable than in estuaries (Meagher 1971). This behavior makes them susceptible to fishing pressure.  Spawning can occur throughout the year (Andres et al. 2010), but can peak in the spring in Indonesian waters (Zairion 2015a).  They do not appear to undergo large-scale migrations. 
+
+Well that's annoying. So one option would be to evaluate SPR in the spring only. The problem is is if there are annual recruitment pulses / spawning periods, your SPR will look different depending on what time of the year you sample: lowest at the start of the pulse, highlest later. Basically, violating equilibrium assumptions. So, for this to work as is need to assume constant growth, constant recruitment, and EQ fishing
+
+```{r}
+
+
+linf <- 189.50
+
+k <-  1.2
+
+t0 <- -0.0792
+
+lmat_50 <- 102
+
+lmat_95 <- 106
+
+m <- 1.29
+
+wa <- 4.1e-2
+
+wb <- 3.183
+
+
+bsc_lbspr_lengths <- bsc_lengths %>% 
+  filter(sex_type == "Female") %>% 
+  select(year, carapace_width) %>% 
+  mutate(id = 1:nrow(.)) %>% 
+  pivot_wider(names_from = "year", values_from = "carapace_width") %>% 
+  select(-id)
+
+write_csv(bsc_lbspr_lengths, "temp_bsc_lbspr_lengths.csv")
+
+
+bsc_pars <- new("LB_pars")
+
+
+bsc_pars@Species <- "bsc"
+bsc_pars@Linf <- linf 
+bsc_pars@L50 <- lmat_50 
+bsc_pars@L95 <- lmat_95
+bsc_pars@MK <- m / k
+bsc_pars@L_units <- "mm"
+
+
+bsc_lbspr_lengths <-
+  new(
+    "LB_lengths",
+    file = "temp_bsc_lbspr_lengths.csv",
+    dataType = "raw",
+    header = TRUE,
+    LB_pars = bsc_pars
+  )
+
+plotSize(bsc_lbspr_lengths)
+
+
+bsc_lbspr_fit <- LBSPRfit(bsc_pars, bsc_lbspr_lengths)
+  
+```
+
+Examining fit
+
+
+```{r}
+
+plotSize(bsc_lbspr_fit)
+
+```
+
+```{r}
+plotMat(bsc_lbspr_fit)
+
+```
+
+
+
+
+```{r}
+plotEsts(bsc_lbspr_fit)
+
+```
+
+
+```{r}
+
+sim_bsc_pars <- bsc_pars
+
+sim_bsc_pars@SL50 <- bsc_lbspr_fit@SL50[1]
+sim_bsc_pars@SL95 <- bsc_lbspr_fit@SL95[1] 
+
+sim_bsc_pars@SPR = 0.4
+
+plotTarg(sim_bsc_pars, bsc_lbspr_lengths, yr=1)
+
+```
+
+
+So, suggests SPR around 0.2, pretty low. Let's compare months / locations
+
+
+```{r}
+
+
+
+
+lbspr_foo <- function(data){
+  
+  bsc_lbspr_lengths <- data %>% 
+  select(year, carapace_width) %>% 
+  mutate(id = 1:nrow(.)) %>% 
+  pivot_wider(names_from = "year", values_from = "carapace_width") %>% 
+  select(-id)
+
+  write_csv(bsc_lbspr_lengths, "temp_bsc_lbspr_lengths.csv")
+
+  
+  bsc_lbspr_lengths <-
+  new(
+    "LB_lengths",
+    file = "temp_bsc_lbspr_lengths.csv",
+    dataType = "raw",
+    header = TRUE,
+    LB_pars = bsc_pars
+  )
+
+
+bsc_lbspr_fit <- LBSPRfit(bsc_pars, bsc_lbspr_lengths)
+  
+}
+
+
+monthly_bsc <- bsc_lengths %>% 
+  group_by(month) %>% 
+  nest() %>% 
+  mutate(lbspr_fit = map(data,lbspr_foo))
+
+
+
+```
+
+June
+
+```{r}
+
+plotEsts(monthly_bsc$lbspr_fit[[which(monthly_bsc$month == "Jun")]]) 
+
+
+```
+
+July
+
+```{r}
+
+plotEsts(monthly_bsc$lbspr_fit[[which(monthly_bsc$month == "Jul")]]) 
+
+
+```
+
+August
+
+```{r}
+
+plotEsts(monthly_bsc$lbspr_fit[[which(monthly_bsc$month == "Aug")]]) 
+
+
+```
+
+September
+
+```{r}
+
+plotEsts(monthly_bsc$lbspr_fit[[which(monthly_bsc$month == "Sep")]]) 
+
+
+```
+
+Pretty consistent in months
+
+
+```{r}
+
+
+lbspr_foo <- function(data){
+  
+  bsc_lbspr_lengths <- data %>% 
+  select(year, carapace_width) %>% 
+  mutate(id = 1:nrow(.)) %>% 
+  pivot_wider(names_from = "year", values_from = "carapace_width") %>% 
+  select(-id)
+
+  write_csv(bsc_lbspr_lengths, "temp_bsc_lbspr_lengths.csv")
+
+  
+  bsc_lbspr_lengths <-
+  new(
+    "LB_lengths",
+    file = "temp_bsc_lbspr_lengths.csv",
+    dataType = "raw",
+    header = TRUE,
+    LB_pars = bsc_pars
+  )
+
+
+bsc_lbspr_fit <- LBSPRfit(bsc_pars, bsc_lbspr_lengths)
+  
+}
+
+
+location_bsc <- bsc_lengths %>% 
+  group_by(location) %>% 
+  nest() %>% 
+  mutate(obs = map_dbl(data, nrow)) %>% 
+  filter(obs > 100) %>% 
+  mutate(lbspr_fit = map(data,lbspr_foo))
+
+```
+
+MGM
+
+```{r}
+plotEsts(location_bsc$lbspr_fit[[which(location_bsc$location == "MGM")]]) 
+```
+
+
+Margasari
+
+```{r}
+plotEsts(location_bsc$lbspr_fit[[which(location_bsc$location == "Margasari")]]) 
+
+```
+
+Pretty stable across space as well. 
+
+Just to visualize sensitivity to Linf
+
+
+```{r}
+
+
+lbspr_foo <- function(linf,m_k,data, pars){
+  
+ pars@Linf <- linf
+  
+ pars@MK = m_k
+ 
+  bsc_lbspr_lengths <- data %>% 
+  select(year, carapace_width) %>% 
+  mutate(id = 1:nrow(.)) %>% 
+  pivot_wider(names_from = "year", values_from = "carapace_width") %>% 
+  select(-id)
+
+  write_csv(bsc_lbspr_lengths, "temp_bsc_lbspr_lengths.csv")
+
+  
+  bsc_lbspr_lengths <-
+  new(
+    "LB_lengths",
+    file = "temp_bsc_lbspr_lengths.csv",
+    dataType = "raw",
+    header = TRUE,
+    LB_pars = pars
+  )
+
+
+bsc_lbspr_fit <- LBSPRfit(pars, bsc_lbspr_lengths)
+  
+}
+
+
+linf_bsc <- expand_grid(linf = seq(150,199),
+                        m_k = seq(.8, 1.2, by = .1))
+
+
+linf_bsc <- linf_bsc %>% 
+  mutate(lbspr_fit = map2(linf,m_k,lbspr_foo, data = bsc_lengths, pars= bsc_pars)) %>% 
+  mutate(spr = map_dbl(lbspr_fit, ~.x@SPR))
+
+olinf <- linf
+
+linf_bsc %>% 
+  ggplot(aes(linf, m_k, fill =  spr)) + 
+  geom_raster(interpolate = TRUE) + 
+  scale_fill_gradient2(low = "tomato", high = "steelblue", mid = "white", midpoint = 0.4,
+                       limits = c(0,1), breaks = seq(0,1, by = 0.2)) + 
+  geom_hline(aes(yintercept = m / k)) + 
+  geom_vline(aes(xintercept = olinf))
+
+```
+
+
+
+
 

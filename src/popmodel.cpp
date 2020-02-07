@@ -36,6 +36,7 @@ List popmodel(NumericVector length_at_age,
   
   n_t(0,_) = r0 * exp(-m * age_vector);
   
+  
   n_t(0,n_ages - 1) = n_t(0,n_ages - 2)* exp(-m) / (1 - exp(-m));
   
   b_t(0,_) =  n_t(0,_) * weight_at_age;
@@ -43,6 +44,7 @@ List popmodel(NumericVector length_at_age,
   ssb_t(0,_) =  b_t(0,_) * maturity_at_age;
   
   rec_t(0) = r0 * rec_devs(0);
+  
   
   // burn in population to get average ssb0 in case you allow for recruitment deviates
   for (int t = 1; t < burn_years; t++){
@@ -65,6 +67,7 @@ List popmodel(NumericVector length_at_age,
     
   }
   
+  
   // calcualte mean ssb0
   
   NumericMatrix burn_ssb = ssb_t(Range(0,fmax(0,burn_years - 1)),_);
@@ -86,6 +89,7 @@ List popmodel(NumericVector length_at_age,
       // c_t(t - 1, a - 1) =  (f * selectivity_at_age(a - 1)) / (f * selectivity_at_age(a - 1) + m) * n_t(t - 1, a - 1) * (1 - exp(-(m + f * selectivity_at_age(a - 1)))) * weight_at_age(a - 1);
       
     } // close grow and die
+    
     
     c_t(t - 1,_) = (f * selectivity_at_age) / (f * selectivity_at_age + m) * n_t(t-1, _) * (1 - exp(-(m + f * selectivity_at_age))) * weight_at_age;
     
@@ -124,9 +128,44 @@ List popmodel(NumericVector length_at_age,
     }
   }
   
+  
   // fill in final catches
   c_t(years - 1,_) = (f * selectivity_at_age) / (f * selectivity_at_age + m) * n_t(years -1, _) * (1 - exp(-(m + f * selectivity_at_age))) * weight_at_age;
   
+  
+  
+  // spr
+  
+  NumericVector sp_fished(n_ages);
+  
+  NumericVector sp_unfished(n_ages);
+  
+  // 
+  sp_fished(0) = 1;
+  // 
+  
+  sp_unfished(0) = 1;
+  
+  
+  for (int a = 1; a < n_ages; a++){
+  //   
+    sp_fished(a) = sp_fished(a - 1) * exp(-(m + f * selectivity_at_age(a - 1)));
+    
+    sp_unfished(a) = sp_unfished(a - 1) * exp(-(m));
+    
+  //   
+  }
+  // 
+  
+  sp_fished(n_ages - 1) = sp_fished(n_ages - 2)* exp(-(m + f * selectivity_at_age(n_ages - 1))) / (1 - exp(-(m + f * selectivity_at_age(n_ages - 1))));
+  
+  sp_unfished(n_ages - 1) = sp_unfished(n_ages - 2)* exp(-(m)) / (1 - exp(-(m)));
+  
+  sp_fished = sp_fished * weight_at_age * maturity_at_age;
+
+  sp_unfished = sp_unfished * weight_at_age * maturity_at_age;
+  
+  double spr = sum(sp_fished) / sum(sp_unfished);
   
   return Rcpp::List::create(
     Rcpp::Named("n_t") = n_t,
@@ -135,5 +174,9 @@ List popmodel(NumericVector length_at_age,
     Rcpp::Named("c_t") = c_t,
     Rcpp::Named("burn_ssb") = burn_ssb,
     Rcpp::Named("ssb0") = ssb0,
-    Rcpp::Named("rec_t") = rec_t);
+    Rcpp::Named("rec_t") = rec_t,
+    Rcpp::Named("sp_fished") = sp_fished,
+    Rcpp::Named("sp_unfished") = sp_unfished,
+    Rcpp::Named("spr") = spr
+    );
 } // close popmodel
