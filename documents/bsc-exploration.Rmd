@@ -737,7 +737,6 @@ spr_v_ypr_plot
 
 
 
-## length based reference points
 
 calculate cope and punt indices
 
@@ -1273,6 +1272,72 @@ linf_bsc %>%
 ```
 
 
+## CPUE Analysis
+
+
+```{r}
+library(tidyverse)
+library(rstanarm)
+library(lme4)
+library(here)
+
+bsc_cpue <- readxl::read_xlsx(here("data","2019-BSC-CPUE-092019.xlsx"),
+                              sheet = "CPUE-Vericatch") %>% 
+  mutate(sample_date = lubridate::ymd_hms(start_date_time)) %>% 
+  select(sample_date, everything()) %>% 
+  mutate(year = lubridate::year(sample_date),
+         month = lubridate::month(sample_date, label = TRUE),
+         day = lubridate::day(sample_date),
+         weekday = lubridate::wday(sample_date, label = TRUE)) %>% 
+  rename(cpue = `CPUE (catch/hours fished)`)
+
+bsc_cpue$year %>% 
+  unique()
+
+
+# bsc_cpue <- read_csv(here("data","landing-summary-20190919_CIC.csv"),skip = 4) %>% 
+#   mutate(sample_date = lubridate::ymd_hms(start_date_time)) %>% 
+#   select(sample_date, everything()) %>% 
+#   mutate(year = lubridate::year(sample_date),
+#          month = lubridate::month(sample_date, label = TRUE),
+#          day = lubridate::day(sample_date),
+#          weekday = lubridate::wday(sample_date, label = TRUE)) %>% 
+#   rename(cpue = `CPUE (catch/hours fished)`)
+# 
+# bsc_cpue$year %>% 
+#   unique()
+
+
+
+```
+
+Oh, there's only one year of CPUE... 
+
+
+And there are all kinds of messiness with the data
+
+```{r}
+
+bsc_cpue %>% 
+  pivot_longer(cols =-contains("date"), names_to = "variable", values_to = "value")
+
+
+```
+
+
+
+```{r}
+
+numeric <- colnames(bsc_cpue)[map_lgl(bsc_cpue,is.numeric)]
+
+numeric = numeric[numeric != "cpue"]
+
+
+bsc_cpue %>% 
+  pivot_longer(cols =numeric, names_to = "variable", values_to = "value")
+
+
+```
 
 
 
